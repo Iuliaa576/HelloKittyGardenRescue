@@ -4,7 +4,7 @@ import time
 
 
 class BroadcastThread(threading.Thread):
-    def __init__(self, client_list, data, interval=2):
+    def __init__(self, client_list, data, interval=10):
         super().__init__()
         self.client_list = client_list
         self.data = data
@@ -13,18 +13,16 @@ class BroadcastThread(threading.Thread):
     def run(self):
         while True:
             payload = {
-                'state': self.data.get_public_state(),
-                'board': self.data.render_board(),
+                "type": "broadcast_state",
+                "state": self.data.get_public_state(),
+                "board": self.data.render_board(),
             }
-            for addr, conn in self.client_list.get_clients().items():
-                try:
-                    self.send_data(conn, payload)
-                except OSError:
-                    self.client_list.remove_client(addr)
-            time.sleep(self.interval)
 
-    def send_data(self, conn, payload):
-        message = json.dumps(payload, default=str)
-        encoded = message.encode()
-        length = len(encoded)
-        conn.sendall(length.to_bytes(4, byteorder='big') + encoded)
+            for token, conn in self.client_list.get_all_clients().items():
+                try:
+                    message = json.dumps(payload).encode()
+                    conn.sendall(len(message).to_bytes(4, 'big') + message)
+                except OSError:
+                    self.client_list.remove_client(token)
+
+            time.sleep(self.interval)

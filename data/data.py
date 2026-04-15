@@ -1,24 +1,22 @@
-import random
 import threading
 import time
 from copy import deepcopy
+
+from data.constants import GRID_WIDTH, GRID_HEIGHT, MAX_PLAYERS, TIME_LIMIT_SECONDS, FLOWERS, GARDEN_SPOTS, OBSTACLES
 
 
 class DataStore:
     def __init__(self):
         self.lock = threading.Lock()
-        self.width = 6
-        self.height = 6
-        self.max_players = 4
+        self.width = GRID_WIDTH
+        self.height = GRID_HEIGHT
+        self.max_players = MAX_PLAYERS
+        self.time_limit_seconds = TIME_LIMIT_SECONDS
+        self.flowers = list(FLOWERS)
+        self.garden_spots = dict(GARDEN_SPOTS)
+        self.obstacles = list(OBSTACLES)
         self.players = {}
         self.next_player_id = 1
-        self.flowers = [(0, 5), (2, 2), (5, 0)]
-        self.garden_spots = {
-            (5, 5): False,
-            (0, 0): False,
-            (3, 4): False,
-        }
-        self.obstacles = [(1, 1), (1, 2), (4, 2), (4, 3)]
         self.event_log = []
         self.game_started_at = time.time()
         self.time_limit_seconds = 300
