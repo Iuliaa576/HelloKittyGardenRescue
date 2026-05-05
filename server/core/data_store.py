@@ -1,33 +1,82 @@
+"""
+Centralized game state management (in-memory database).
+
+The DataStore is the single source of truth for all game state, including:
+- Player positions and status
+- Flower locations
+- Garden spot occupancy
+- Game timing and win conditions
+
+All state mutations are protected by a threading.Lock to ensure consistency
+in a multi-threaded server environment where multiple clients may act
+simultaneously.
+
+The module enforces all game rules:
+- Movement boundaries and collision detection
+- Flower pickup/planting rules
+- Win conditions (all garden spots filled or time expired)
+- Game completion status
+
+Thread-Safety:
+    All public methods use self.lock to ensure thread-safe access to
+    shared game state. Internal helper methods assume the lock is held.
+"""
+
 import threading
 import time
 from copy import deepcopy
 
-from data.constants import GRID_WIDTH, GRID_HEIGHT, MAX_PLAYERS, TIME_LIMIT_SECONDS, FLOWERS, GARDEN_SPOTS, OBSTACLES
+from shared.constants import GRID_WIDTH, GRID_HEIGHT, MAX_PLAYERS, TIME_LIMIT_SECONDS, FLOWERS, GARDEN_SPOTS, OBSTACLES
 
 
 class DataStore:
+    """Centralized game state storage with thread-safe access."""
+
     def __init__(self):
+        """Initialize the game state with default values from constants."""
         self.lock = threading.Lock()
+        
+        # Board dimensions
         self.width = GRID_WIDTH
         self.height = GRID_HEIGHT
+        
+        # Game parameters
         self.max_players = MAX_PLAYERS
         self.time_limit_seconds = TIME_LIMIT_SECONDS
-        self.flowers = list(FLOWERS)
-        self.garden_spots = dict(GARDEN_SPOTS)
-        self.obstacles = list(OBSTACLES)
-        self.players = {}
-        self.next_player_id = 1
-        self.event_log = []
-        self.game_started_at = time.time()
-        self.time_limit_seconds = 300
-        self.winner = None
+        
+        # Game objects (positions and state)
+        self.flowers = list(FLOWERS)                    # Remaining flowers to be picked
+        self.garden_spots = dict(GARDEN_SPOTS)          # Garden spots: position → occupied
+        self.obstacles = list(OBSTACLES)                # Fixed obstacles
+        
+        # Player management
+        self.players = {}                               # player_id → player_data
+        self.next_player_id = 1                         # Counter for generating player IDs
+        
+        # Game logging and timing
+        self.event_log = []                             # Recent game events
+        self.game_started_at = time.time()              # Game start timestamp
+        self.winner = None                              # Winner: None, 'players', or 'time'
 
     def _free_start_position(self):
+        """
+        Find an available starting position for a new player.
+        
+        Prioritizes specific candidate positions near the board edges,
+        then falls back to scanning the entire board if necessary.
+        Avoids occupied players, obstacles, flowers, and garden spots.
+        
+        Returns:
+            tuple: (x, y) coordinate of a free starting position
+        
+        Raises:
+            RuntimeError: If no free positions are available
+        """
         candidates = [
             (0, 1), (1, 0), (2, 0), (3, 0),
             (0, 4), (1, 5), (4, 5), (5, 4)
         ]
-        occupied = {tuple(player['position']) for player in self.players.values()}
+        occupied = {tuple(player['position']) for player in self.players.values() if player['connected']}
         blocked = set(self.obstacles) | set(self.flowers) | set(self.garden_spots.keys())
         for pos in candidates:
             if pos not in occupied and pos not in blocked:
@@ -40,6 +89,21 @@ class DataStore:
         raise RuntimeError('No free start positions available.')
 
     def add_player(self, client_address):
+        """
+        Register a new player and assign starting position.
+        
+        Generates a unique player ID (P1, P2, etc.), finds a free starting
+        position, and creates player state. Logs the join event.
+        
+        Args:
+            client_address (tuple): (host, port) of the connecting client
+        
+        Returns:
+            tuple: (player_id, player_info_dict)
+        
+        Raises:
+            ValueError: If the maximum number of players is already reached
+        """
         with self.lock:
             if len(self.players) >= self.max_players:
                 raise ValueError('Maximum number of players reached.')
@@ -53,15 +117,32 @@ class DataStore:
                 'address': f'{client_address[0]}:{client_address[1]}'
             }
             self._log_event(f'{player_id} joined the garden at {start_pos}.')
-            return player_id, deepcopy(self.players[player_id])
+            return player_id, self.players[player_id].copy()
 
     def remove_player(self, player_id):
+        """
+        Remove a player from the game.
+        
+        Deletes the player's state and logs the departure event.
+        
+        Args:
+            player_id (str): The player ID to remove
+        """
         with self.lock:
             if player_id in self.players:
-                self.players[player_id]['connected'] = False
                 self._log_event(f'{player_id} left the game.')
+                del self.players[player_id]
 
     def _log_event(self, message):
+        """
+        Record a game event in the event log.
+        
+        Keeps only the 15 most recent events (circular buffer).
+        Events include timestamps relative to game start.
+        
+        Args:
+            message (str): Description of the event
+        """
         self.event_log.append({
             'timestamp': round(time.time() - self.game_started_at, 2),
             'message': message,
@@ -69,16 +150,58 @@ class DataStore:
         self.event_log = self.event_log[-15:]
 
     def _inside(self, position):
+        """
+        Check if a position is within board bounds.
+        
+        Args:
+            position (tuple): (x, y) coordinate to check
+        
+        Returns:
+            bool: True if the position is within the board
+        """
         x, y = position
         return 0 <= x < self.width and 0 <= y < self.height
 
     def _occupied_by_player(self, position, exclude_player=None):
+        """
+        Check if a position is occupied by a connected player.
+        
+        Used for collision detection. Can exclude a specific player
+        to allow checking if a player can move to a position.
+        
+        Args:
+            position (tuple): (x, y) coordinate to check
+            exclude_player (str): Player ID to exclude from check (optional)
+        
+        Returns:
+            bool: True if another (connected) player occupies the position
+        """
         for pid, player in self.players.items():
             if pid != exclude_player and tuple(player['position']) == position and player['connected']:
                 return True
         return False
 
     def move_player(self, player_id, direction):
+        """
+        Move a player in the specified direction.
+        
+        Validates:
+        - Game has not finished
+        - Player exists
+        - Direction is valid (up/down/left/right)
+        - New position is within bounds
+        - New position is not an obstacle
+        - New position is not occupied by another player
+        
+        Updates player position and logs the event.
+        
+        Args:
+            player_id (str): The player to move
+            direction (str): Direction to move ('up', 'down', 'left', 'right')
+        
+        Returns:
+            tuple: (success: bool, message: str)
+        """
         deltas = {
             'up': (0, -1),
             'down': (0, 1),
@@ -106,6 +229,23 @@ class DataStore:
             return True, f'{player_id} moved {direction} to {new_pos}.'
 
     def pick_flower(self, player_id):
+        """
+        Pick up a flower from the current tile.
+        
+        Validates:
+        - Game has not finished
+        - Player exists
+        - Player doesn't already carry a flower
+        - There is a flower on the current tile
+        
+        Removes the flower from the board and updates player state.
+        
+        Args:
+            player_id (str): The player picking the flower
+        
+        Returns:
+            tuple: (success: bool, message: str)
+        """
         with self.lock:
             if self.winner:
                 return False, f'Game already finished. Winner: {self.winner}'
@@ -123,6 +263,25 @@ class DataStore:
             return True, f'{player_id} picked a flower at {pos}.'
 
     def plant_flower(self, player_id):
+        """
+        Plant a carried flower in a garden spot.
+        
+        Validates:
+        - Game has not finished
+        - Player exists
+        - Player carries a flower
+        - Current tile is a garden spot
+        - The garden spot is not already occupied
+        
+        Updates garden spot occupancy, removes flower from player inventory,
+        and checks for win condition (all garden spots filled).
+        
+        Args:
+            player_id (str): The player planting the flower
+        
+        Returns:
+            tuple: (success: bool, message: str)
+        """
         with self.lock:
             if self.winner:
                 return False, f'Game already finished. Winner: {self.winner}'
@@ -145,6 +304,24 @@ class DataStore:
             return True, f'{player_id} planted a flower at {pos}.'
 
     def get_public_state(self):
+        """
+        Get the current public game state for broadcast to clients.
+        
+        Includes:
+        - Grid dimensions
+        - All player positions and states
+        - Remaining flowers
+        - Garden spot status
+        - Obstacle positions
+        - Time remaining (calculates from start time)
+        - Winner status
+        - Recent events (last 8)
+        
+        Checks for time limit expiration and marks game as finished if needed.
+        
+        Returns:
+            dict: Complete public game state
+        """
         with self.lock:
             elapsed = int(time.time() - self.game_started_at)
             remaining = max(0, self.time_limit_seconds - elapsed)
@@ -174,6 +351,21 @@ class DataStore:
             }
 
     def render_board(self):
+        """
+        Render the current game board as ASCII art for terminal display.
+        
+        Symbols:
+        - '.' : Empty tile
+        - '#' : Obstacle
+        - 'F' : Flower
+        - 'G' : Empty garden spot
+        - '*' : Occupied garden spot
+        - 'A'-'D' : Players (uppercase = no flower)
+        - 'a'-'d' : Players carrying flower (lowercase)
+        
+        Returns:
+            str: Formatted board with row/column headers
+        """
         with self.lock:
             board = [['.' for _ in range(self.width)] for _ in range(self.height)]
             for x, y in self.obstacles:

@@ -1,272 +1,225 @@
-# Hello Kitty Garden Rescue - Distributed Multiplayer Game Prototype
+# Hello Kitty Garden Rescue - Code Documentation
 
-This project is a **distributed multiplayer game prototype (non-graphical)** developed for the intermediate presentation.
+## Overview
 
-It follows the required structure from the laboratory:
-- client-server architecture  
-- support for multiple clients  
-- shared game state managed on the server  
-- communication via sockets  
-- broadcast-based synchronization  
+This is a **distributed multiplayer game prototype** written in Python, implementing a client-server architecture with asymmetric communication channels.
+
+**Game Objective**: Players cooperatively collect flowers and plant them in garden spots before time expires.
 
 ---
 
-## 1. Architecture
+## Architecture Summary
 
 ### Communication Model
 
-Asymmetric communication model:
+The system uses **asymmetric communication**:
 
-- **Client → Server (command channel):**  
-  Used only for sending player actions to the server  
+- **Client → Server (Command Channel, Port 37000)**
+  - Clients send player actions (move, pick, plant)
+  - Uses request/response pattern at the connection level
 
-- **Server → Client (broadcast channel):**  
-  Used for all outgoing messages, including:  
-  - welcome messages  
-  - command results  
-  - periodic game state updates  
-  - disconnect notifications  
+- **Server → Client (Broadcast Channel, Port 37001)**
+  - Server sends welcome messages, command results, periodic updates, and disconnects
+  - Unidirectional push model
+  - All responses delivered via broadcast
 
-This design removes synchronous request/response communication and ensures
-that all server-to-client data is sent through a unified broadcast mechanism.
+### Key Design Patterns
 
----
-
-### Ports
-- Main communication (commands): `PORT = 37000`  
-- Broadcast updates: `BROADCAST_PORT = 37001`  
+- **Skeleton Pattern** (`GameServerSkeleton`): Handles one client connection per thread
+- **Stub Pattern** (`GameClientStub`): Client-side connection handler
+- **Service Facade** (`GameService`): Abstraction layer for game operations
+- **Data Access Object** (`DataStore`): Centralized state management
+- **Registry Pattern** (`ClientRegistry`): Tracks active broadcast connections
 
 ---
 
-### Concurrency
-- One thread per connected client  
-- One broadcast thread (server → clients)  
-- One thread for accepting broadcast connections  
-- Shared state protected using `threading.Lock`  
+## Game Logic
+
+### Player Actions
+
+#### Movement
+- **Valid**: Within board bounds, not an obstacle, not occupied by another player
+- **Result**: Updates player position and logs event
+
+#### Pick Flower
+- **Preconditions**: Player is on a flower tile, not already carrying a flower
+- **Effect**: Removes flower from board, sets `player['has_flower'] = True`
+- **Result**: Success or error message
+
+#### Plant Flower
+- **Preconditions**: Player has flower, on garden spot, garden spot not occupied
+- **Effect**: Sets garden spot as occupied, player loses flower
+- **Win Condition**: If all garden spots filled, game ends with "players" winning
+
+### Game End Conditions
+
+1. **Players Win**: All three garden spots filled with flowers
+2. **Time Expires**: Time remaining reaches 0 (players lose)
+3. **Game Finished**: No further actions allowed once winner is determined
 
 ---
 
-## 2. Communication Protocol
+## Threading Model
 
-### Client → Server Messages
+### Server
 
-Each player sends only actions:
+```
+Main Thread (Command Listener)
+├─ Accept connections → spawn GameServerSkeleton
+└─ Each GameServerSkeleton runs in its own thread
+    └─ Reads from command channel
+    └─ Writes to broadcast channel (via ClientRegistry)
 
-- A command string (fixed size):  
-  - `move`  
-  - `pick`  
-  - `plant`  
-  - `state`  
-  - `stop`  
+Broadcast Thread
+├─ Accept connections → register in ClientRegistry
+└─ Hold open connections
 
-- Additional data (only when needed):  
+BroadcastSender Thread
+└─ Every 5 seconds: send state to all registered clients
 
-For `move`:
-```json
-{ "direction": "up"; "down"; "left"; "right" }
+DataStore Lock
+└─ Protects all state mutations (threads acquire when accessing game state)
 ```
 
-Players send only **actions**, not the full game state.
+### Client
+
+```
+Main Thread (User Input)
+├─ Read commands from stdin
+└─ Send via command_conn (GameClientStub)
+
+BroadcastListener Thread (daemon)
+├─ Listen on broadcast_conn
+└─ Display messages to stdout
+```
 
 ---
 
-### Server → Client Messages (Broadcast Only)
+## Data Structures
 
-All server responses and updates are sent through the broadcast channel.
-
-#### 1. Welcome Message
-
-Sent when a player connects:
-
-```json
+### Player State (DataStore.players)
+```python
 {
-  "type": "welcome",
-  "player_id": "P1",
-  "message": "Welcome P1! Cooperative garden rescue started.",
-  "player": { ... },
-  "state": { ... },
-  "board": "..."
+    'position': (x, y),           # Current position
+    'has_flower': bool,           # Carrying a flower?
+    'connected': bool,            # Still connected?
+    'address': 'host:port',       # Client address
+    'name': 'player_name'         # Player's name
 }
 ```
 
-#### 2. Command Result Message
-
-Sent after processing a player action:
-
-```json
+### Public Game State (from get_public_state())
+```python
 {
-  "type": "command_result",
-  "ok": true,
-  "message": "P1 moved up to (0, 0).",
-  "player_id": "P1",
-  "state": { ... },
-  "board": "..."
-}
-```
-
-#### 3. Periodic Broadcast State Update
-
-Sent periodically to all connected clients:
-
-```json
-{
-  "type": "broadcast_state",
-  "state": { ... },
-  "board": "..."
-}
-```
-
-#### 4. Disconnect Message
-
-Sent when a player leaves:
-
-```json
-{
-  "type": "bye",
-  "ok": true,
-  "message": "P1 disconnected."
+    'grid_size': [6, 6],
+    'players': {
+        'P1': {'position': [2, 3], 'has_flower': False, 'connected': True},
+        ...
+    },
+    'flowers': [[0, 5], [2, 2], [5, 0]],
+    'garden_spots': [
+        {'position': [5, 5], 'occupied': False},
+        {'position': [0, 0], 'occupied': True},
+        {'position': [3, 4], 'occupied': False}
+    ],
+    'obstacles': [[1, 1], [1, 2], [4, 2], [4, 3]],
+    'time_limit_seconds': 300,
+    'time_remaining_seconds': 287,
+    'winner': None,  # None, 'players', or 'time'
+    'recent_events': [
+        {'timestamp': 2.45, 'message': 'P1 joined...'},
+        ...
+    ]
 }
 ```
 
 ---
 
-### Structure of the `state` Object
+## Example Communication Flow
 
-The `state` object contains the full public game state:
+### Join Sequence
+```
+Client                              Server
+  │                                   │
+  ├─ Connect to port 37001 ────────-─→│
+  │                                   │
+  ├─ Send {client_token: "uuid"} ────→│
+  │                                   │ (BroadcastAcceptor receives)
+  │                                   │ (Add to ClientRegistry)
+  │                                   │
+  ├─ [Start BroadcastListener]        │
+  │                                   │
+  ├─ Connect to port 37000 ───────-──→│
+  │                                   │ (GameServerSkeleton receives)
+  ├─ Send {type: "join", ...} ─────-─→│
+  │                                   │ (Wait for client in registry)
+  │                                   │ (Call join_player)
+  │                                   │ (Send WELCOME via broadcast)
+  │←─ WELCOME {board, state} ───────-─│
+  │  (BroadcastListener receives)     │
+```
 
-- `grid_size`: `[width, height]`  
-- `players`: dictionary with:
-  - `position`  
-  - `has_flower`  
-  - `connected`  
-- `flowers`: list of positions  
-- `garden_spots`: list of positions with occupation status  
-- `obstacles`: list of positions  
-- `time_limit_seconds`  
-- `time_remaining_seconds`  
-- `winner`: `null`, `"players"`, or `"time"`  
-- `recent_events`: list of recent game actions  
-
----
-
-## 3. Game Machine (Server Side)
-
-The server acts as the **game engine**, implemented using:
-
-### Main Components
-
-- `Machine`  
-  - Accepts clients  
-  - Manages threads  
-  - Coordinates communication  
-
-- `ProcessClient`  
-  - Handles each player's commands  
-  - Processes actions  
-  - Sends results through broadcast  
-
-- `BroadcastThread`  
-  - Periodically sends game state to all clients  
-
-- `DataStore`  
-  - Centralized game state (in-memory database)  
-  - Contains all game logic and rules  
+### Move Sequence
+```
+Client                              Server
+  │                                   │
+  ├─ Send {type: "move", ...} ─────-─→│
+  │                                   │ (GameServerSkeleton)
+  │                                   │ (game_service.move())
+  │                                   │ (DataStore validates & updates)
+  │←─ COMMAND_RESULT {board} ──────-──│
+  │  (BroadcastListener receives)     │
+  │                                   │
+  │ (Every 5 seconds)                 │
+  │←─ BROADCAST_STATE {board} ─────--─│
+  │  (From BroadcastSender thread)    │
+```
 
 ---
 
-## 4. Game Description
 
-### Objective
+## Key Design Insights
 
-Players must **cooperate** to:
-- collect all flowers  
-- plant them in all garden spots  
-before the time limit expires  
+1. **Asymmetric Communication**: Server only sends via broadcast, simplifying client handling and enabling easy player broadcasting.
 
----
+2. **Token-Based Handshake**: Using UUIDs to correlate broadcast and command channels allows flexibility in connection order.
 
-### Rules
+3. **Thread-Safe State**: All game mutations protected by a single lock in DataStore, ensuring consistency despite concurrent players.
 
-- 2–4 players  
-- Players can move:
-  - `up`, `down`, `left`, `right`  
-- Players can:
-  - pick a flower (if on a flower tile)  
-  - plant a flower (if on a garden spot)  
-- Each player can carry **only one flower at a time**  
+4. **Separation of Concerns**:
+   - Protocol: Handles low-level framing
+   - DataStore: Manages state and validation
+   - GameService: Provides high-level API
+   - Network components: Handle I/O only
 
-Game ends:
-- **Win:** all garden spots are filled  
-- **Lose:** time runs out  
+5. **Periodic Broadcasting**: Rather than responding to each action, the server periodically pushes the entire state, reducing protocol complexity.
+
+6. **Event Logging**: Circular buffer of recent events provides game history for debugging and player feedback.
+
+7. **Graceful Cleanup**: All threads handle disconnection gracefully, cleaning up resources even in error cases.
 
 ---
 
-### Game Parameters
+## Configuration
 
-The game parameters are defined as configuration constants to allow easy modification and future support for difficulty levels.
-
-Current values:
-- Grid size: `6 x 6`  
-- Max players: `4`  
-- Time limit: `300 seconds`  
-- Obstacles: fixed positions  
-- Flowers: fixed positions  
-- Garden spots: fixed positions  
+Modify `shared/constants.py` to adjust:
+- Board size: `GRID_WIDTH`, `GRID_HEIGHT`
+- Player limit: `MAX_PLAYERS`
+- Time limit: `TIME_LIMIT_SECONDS`
+- Object positions: `FLOWERS`, `GARDEN_SPOTS`, `OBSTACLES`
+- Broadcast interval: Pass `interval=` to `BroadcastSender` in `machine.py`
 
 ---
 
-## 5. Data Structures
+## Extensibility
 
-The game state is stored in `DataStore` using:
+Future enhancements:
 
-- `players: dict`
-  - position, has_flower, connection status  
-- `flowers: list[tuple]`  
-- `garden_spots: dict[(x, y) → bool]`  
-- `obstacles: list[tuple]`  
-- `event_log: list[dict]`  
-- `winner: str | None`  
-- `time_remaining`  
+- **Difficulty Levels**: Use configuration profiles
+- **GUI Client**: Replace CLI with PyGame
+- **Game Lobby**: Add pre-game room management
 
-All access is synchronized using a **thread lock** to ensure consistency in a multi-threaded environment.
-
----
-
-## 6. Terminal Representation
-
-Symbols:
-- `.` → empty tile  
-- `#` → obstacle  
-- `F` → flower  
-- `G` → empty garden spot  
-- `*` → occupied garden spot  
-- `A, B, C, D` → players (no flower)  
-- `a, b, c, d` → players (carrying flower)  
-
----
-
-## 7. Implemented Features (Current State)
-
-- Multiple clients connected simultaneously  
-- Command channel from client to server working  
-- Broadcast-only communication from server to clients  
-- Periodic game state updates  
-- Targeted broadcast messages (welcome, command results, disconnect)  
-- Centralized game state on server  
-- Player actions:
-  - move  
-  - pick  
-  - plant  
-- Game rules enforced  
-- Terminal visualization of the board  
-- Event logging and time tracking  
-
----
-
-## 8. Features in Development
-
-- Graphical interface (PyGame)  
-- Improved game design and visuals  
-- Additional gameplay mechanics  
-- Better UI/UX for players   
-- Difficulty levels using configurable constants  
+Extras:
+- **Statistics**: Track player stats across games
+- **Authentication**: Add login system
+- **Chat**: Enable player communication

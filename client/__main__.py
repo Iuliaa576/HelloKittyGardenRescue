@@ -1,4 +1,4 @@
-from client.interaction import Interaction
+from client.ui.interaction import Interaction
 
 if __name__ == "__main__":
     interaction = Interaction()

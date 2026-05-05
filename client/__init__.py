@@ -1,6 +1,11 @@
-SERVER_ADDRESS = "localhost"
-PORT = 37000
-BROADCAST_PORT = 37001
+"""
+Client module for Hello Kitty Garden Rescue.
 
-COMMAND_SIZE = 10
-FLOAT_SIZE = 20
+This package contains the client-side implementation of the distributed game:
+    - UI: Interactive command-line interface (client.ui.interaction)
+    - Network: Socket communication and message handling (client.network)
+        - GameClientStub: Main client connection handler
+        - BroadcastListener: Daemon thread for receiving server updates
+
+Entry point: python -m client
+"""
