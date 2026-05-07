@@ -25,7 +25,7 @@ class Interaction:
     """Command-line interface for game interaction."""
 
     def _print_help(self):
-        """Display available commands to the player."""
+        """Display the list of supported commands."""
         print("Commands:")
         print("  move up|down|left|right")
         print("  pick")
@@ -36,68 +36,58 @@ class Interaction:
 
     def execute(self):
         """
-        Run the interactive client session.
-        
-        Prompts for server address and player name, establishes connection,
-        displays help, then enters command loop.
-        
-        Command loop continues until:
-        - Player issues 'stop' command, or
-        - Network/connection error occurs, or
-        - Server disconnects
-        
-        Ensures graceful cleanup in all cases.
+        Start the terminal-based game session.
+
+        Prompts the player for connection information,
+        establishes the connection to the server,
+        then continuously processes player commands.
         """
-        # Get server address from user (with default)
+
+        # Get server address from user
         server_address = input(
             f"Server address [{DEFAULT_SERVER_ADDRESS}]: "
         ).strip() or DEFAULT_SERVER_ADDRESS
 
-        # Get player name from user
+        # Get player name
         player_name = input("Player name: ").strip() or "Player"
 
         # Create and connect client
         client = GameClientStub(server_address=server_address)
         client.connect(player_name)
 
-        # Display command help
+        # Show available commands
         self._print_help()
 
         try:
             while True:
                 cmd = input("Command: ").strip().lower()
+
                 if not cmd:
                     continue
 
                 parts = cmd.split()
 
                 if parts[0] == "help":
-                    # Display help message
                     self._print_help()
 
                 elif parts[0] == "move" and len(parts) == 2:
-                    # Move in specified direction
                     client.move(parts[1])
 
                 elif parts[0] == "pick":
-                    # Pick flower
                     client.pick()
 
                 elif parts[0] == "plant":
-                    # Plant flower
                     client.plant()
 
                 elif parts[0] == "state":
-                    # Request state snapshot
                     client.state()
 
                 elif parts[0] == "stop":
-                    # Gracefully disconnect and exit
                     return
 
                 else:
-                    # Invalid command
                     print("Invalid command")
+
         finally:
-            # Always disconnect on exit (even if exception occurs)
+            # Ensure client disconnects on exit
             client.disconnect()

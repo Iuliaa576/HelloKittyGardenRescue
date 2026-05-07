@@ -1,98 +1,105 @@
 """
 Client-side broadcast message listener thread.
 
-Runs as a daemon thread and continuously listens for messages from the server
-via the broadcast channel. Processes and displays messages to the player.
-
-Message Types Handled:
-    - WELCOME: Initial join confirmation with game state
-    - COMMAND_RESULT: Response to a player action with updated state
-    - BROADCAST_STATE: Periodic game state update
-    - BYE: Disconnect notification
-
-The listener runs independently and terminates only when the connection
-closes (either due to network error or server shutdown).
+This version supports both:
+- Terminal UI: prints server messages
+- PyGame UI: updates GameState silently
 """
 
 import threading
 
-from shared.message_types import WELCOME, COMMAND_RESULT, BROADCAST_STATE, BYE
+from shared.message_types import WELCOME, COMMAND_RESULT, BROADCAST_STATE, BYE, ERROR
+from shared.protocol import receive_packet
 
 
 class BroadcastListener(threading.Thread):
     """Daemon thread listening for server broadcast messages."""
 
-    def __init__(self, connection):
-        """
-        Initialize the broadcast listener.
-        
-        Args:
-            connection: Socket connection to receive broadcast messages from
-        """
+    def __init__(self, connection, game_state=None, print_messages=True):
+        """Initialize the broadcast listener thread."""
         super().__init__(daemon=True)
         self.connection = connection
+        self.game_state = game_state
+        self.print_messages = print_messages
+        self.running = True
 
     def run(self):
-        """
-        Continuously receive and display broadcast messages.
-        
-        Processes different message types and displays relevant information
-        to the player (messages, board state, time remaining, etc.).
-        
-        Runs until the broadcast connection closes.
-        """
-        from shared.protocol import receive_packet
-
-        while True:
+        """Continuously receive and process packets from the server."""
+        while self.running:
             try:
-                data = receive_packet(self.connection)
-                msg_type = data.get("type")
+                packet = receive_packet(self.connection)
 
-                print("\n=== Broadcast message ===")
+                if self.game_state is not None:
+                    self.game_state.update_from_packet(packet)
 
-                if msg_type == WELCOME:
-                    # Display welcome message with initial state
-                    print(data.get("message"))
-                    print("Assigned player id:", data.get("player_id"))
-                    if data.get("board"):
-                        print(data["board"])
+                if self.print_messages:
+                    self._print_packet(packet)
 
-                elif msg_type == COMMAND_RESULT:
-                    # Display command result message and updated state
-                    print(data.get("message"))
-                    if data.get("board"):
-                        print(data["board"])
-
-                    state = data.get("state", {})
-                    print("Time remaining:", state.get("time_remaining_seconds"))
-                    print("Winner:", state.get("winner"))
-
-                elif msg_type == BROADCAST_STATE:
-                    # Display periodic state broadcast (board, time, recent events)
-                    if data.get("board"):
-                        print(data["board"])
-
-                    state = data.get("state", {})
-                    print("Time remaining:", state.get("time_remaining_seconds"))
-                    print("Winner:", state.get("winner"))
-
-                    # Show last 3 recent events
-                    events = state.get("recent_events", [])
-                    if events:
-                        print("Recent events:")
-                        for event in events[-3:]:
-                            print(f"  t={event['timestamp']}: {event['message']}")
-
-                elif msg_type == BYE:
-                    # Display disconnect message
-                    print(data.get("message"))
-
-                else:
-                    # Unknown message type
-                    print("Unknown broadcast message:", data)
-
-                print("=========================\n")
+                if packet.get("type") == BYE:
+                    self.running = False
+                    break
 
             except Exception as exc:
-                print("Broadcast listener stopped:", exc)
+                if self.game_state is not None:
+                    self.game_state.mark_connection_lost(
+                        f"Broadcast listener stopped: {exc}"
+                    )
+
+                if self.print_messages:
+                    print("Broadcast listener stopped:", exc)
+
                 break
+
+    def stop(self):
+        """Stop the listener loop."""
+        self.running = False
+
+    def _print_packet(self, packet):
+        """Display packet information in the terminal interface."""
+        msg_type = packet.get("type")
+
+        print("\n=== Broadcast message ===")
+
+        if msg_type == WELCOME:
+            print(packet.get("message"))
+            print("Assigned player id:", packet.get("player_id"))
+
+            if packet.get("board"):
+                print(packet["board"])
+
+        elif msg_type == COMMAND_RESULT:
+            print(packet.get("message"))
+
+            if packet.get("board"):
+                print(packet["board"])
+
+            state = packet.get("state", {})
+            print("Time remaining:", state.get("time_remaining_seconds"))
+            print("Winner:", state.get("winner"))
+
+        elif msg_type == BROADCAST_STATE:
+            if packet.get("board"):
+                print(packet["board"])
+
+            state = packet.get("state", {})
+            print("Time remaining:", state.get("time_remaining_seconds"))
+            print("Winner:", state.get("winner"))
+
+            events = state.get("recent_events", [])
+
+            if events:
+                print("Recent events:")
+
+                for event in events[-3:]:
+                    print(f"  t={event['timestamp']}: {event['message']}")
+
+        elif msg_type == BYE:
+            print(packet.get("message"))
+
+        elif msg_type == ERROR:
+            print("Error:", packet.get("message"))
+
+        else:
+            print("Unknown broadcast message:", packet)
+
+        print("=========================\n")

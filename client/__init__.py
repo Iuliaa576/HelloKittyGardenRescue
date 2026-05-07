@@ -1,11 +1,15 @@
 """
-Client module for Hello Kitty Garden Rescue.
+Client package for Hello Kitty Garden Rescue.
 
-This package contains the client-side implementation of the distributed game:
-    - UI: Interactive command-line interface (client.ui.interaction)
-    - Network: Socket communication and message handling (client.network)
-        - GameClientStub: Main client connection handler
-        - BroadcastListener: Daemon thread for receiving server updates
+This package contains the client-side components of the distributed game,
+including:
 
-Entry point: python -m client
+- Terminal interaction layer
+- PyGame graphical interface
+- Network communication logic
+- Broadcast listener thread
+- Client-side game state management
+
+The client communicates with the remote game server using sockets and
+receives synchronized game updates in real time.
 """

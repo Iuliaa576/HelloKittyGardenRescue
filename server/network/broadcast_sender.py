@@ -1,14 +1,8 @@
 """
 Periodic game state broadcaster thread.
 
-Runs continuously and periodically sends the current game state to all
-connected clients via their broadcast channels.
-
-This implements the "push" mechanism for game updates: rather than clients
-polling for state changes, the server proactively sends the state at
-regular intervals.
-
-Handles network errors gracefully by removing clients with failed sends.
+This module periodically sends the current game state to all connected
+clients through their broadcast connections.
 """
 
 import threading
@@ -18,16 +12,10 @@ from shared.message_types import BROADCAST_STATE
 
 
 class BroadcastSender(threading.Thread):
-    """Daemon thread that broadcasts game state to all clients periodically."""
 
     def __init__(self, client_registry, game_service, interval=5):
         """
-        Initialize the broadcast sender.
-        
-        Args:
-            client_registry (ClientRegistry): Registry of broadcast connections
-            game_service (GameService): Service layer for game state
-            interval (int): Seconds between broadcasts (default: 5)
+        Initialize the periodic broadcast sender.
         """
         super().__init__(daemon=True)
         self.client_registry = client_registry
@@ -36,12 +24,7 @@ class BroadcastSender(threading.Thread):
 
     def run(self):
         """
-        Continuously broadcast game state at regular intervals.
-        
-        Sends a BROADCAST_STATE message with the current game state and
-        board representation to all connected clients.
-        
-        Runs indefinitely, disconnecting clients that fail to receive.
+        Continuously send game state updates to all connected clients.
         """
         while True:
             payload = {

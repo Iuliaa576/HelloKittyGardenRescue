@@ -1,225 +1,326 @@
-# Hello Kitty Garden Rescue - Code Documentation
+# Hello Kitty Garden Rescue
+
+Distributed Systems Project — 2025/2026
 
 ## Overview
 
-This is a **distributed multiplayer game prototype** written in Python, implementing a client-server architecture with asymmetric communication channels.
+Hello Kitty Garden Rescue is a cooperative multiplayer distributed game developed in Python for the Distributed Systems course.
 
-**Game Objective**: Players cooperatively collect flowers and plant them in garden spots before time expires.
+Players must collaborate to collect flowers scattered around the map and plant them in the designated garden spots before the countdown timer expires.
 
----
+The game follows a distributed client-server architecture and supports multiple concurrent players connected through sockets.
 
-## Architecture Summary
-
-### Communication Model
-
-The system uses **asymmetric communication**:
-
-- **Client → Server (Command Channel, Port 37000)**
-  - Clients send player actions (move, pick, plant)
-  - Uses request/response pattern at the connection level
-
-- **Server → Client (Broadcast Channel, Port 37001)**
-  - Server sends welcome messages, command results, periodic updates, and disconnects
-  - Unidirectional push model
-  - All responses delivered via broadcast
-
-### Key Design Patterns
-
-- **Skeleton Pattern** (`GameServerSkeleton`): Handles one client connection per thread
-- **Stub Pattern** (`GameClientStub`): Client-side connection handler
-- **Service Facade** (`GameService`): Abstraction layer for game operations
-- **Data Access Object** (`DataStore`): Centralized state management
-- **Registry Pattern** (`ClientRegistry`): Tracks active broadcast connections
+The graphical interface was implemented using PyGame.
 
 ---
 
-## Game Logic
+# Game Features
 
-### Player Actions
-
-#### Movement
-- **Valid**: Within board bounds, not an obstacle, not occupied by another player
-- **Result**: Updates player position and logs event
-
-#### Pick Flower
-- **Preconditions**: Player is on a flower tile, not already carrying a flower
-- **Effect**: Removes flower from board, sets `player['has_flower'] = True`
-- **Result**: Success or error message
-
-#### Plant Flower
-- **Preconditions**: Player has flower, on garden spot, garden spot not occupied
-- **Effect**: Sets garden spot as occupied, player loses flower
-- **Win Condition**: If all garden spots filled, game ends with "players" winning
-
-### Game End Conditions
-
-1. **Players Win**: All three garden spots filled with flowers
-2. **Time Expires**: Time remaining reaches 0 (players lose)
-3. **Game Finished**: No further actions allowed once winner is determined
+* Cooperative multiplayer gameplay
+* Distributed client-server architecture
+* Real-time shared game state
+* Socket-based communication
+* Concurrent player handling using threads
+* Thread-safe shared game state using locks
+* Lobby screen with character selection
+* PyGame graphical interface
+* Terminal interface support
+* Multiple Hello Kitty characters
+* Countdown timer
+* Obstacles and interactive objects
+* Victory and defeat states
+* Waiting-for-players system
 
 ---
 
-## Threading Model
+# Game Objective
 
-### Server
+Players must:
 
+1. Move around the map
+2. Pick up flowers
+3. Carry flowers to garden spots
+4. Plant all flowers before time runs out
+
+The game is cooperative:
+all players work together to complete the garden.
+
+---
+
+# Technologies Used
+
+* Python 3
+* PyGame
+* Python sockets
+* Python threading
+
+---
+
+# Distributed Architecture
+
+The project is organized into three main packages:
+
+## Client
+
+Responsible for:
+
+* Graphical interface
+* Terminal interface
+* Sending player commands
+* Receiving updates from the server
+
+Important components:
+
+* `GameClientStub`
+* `BroadcastListener`
+* `pygame_interaction.py`
+
+---
+
+## Server
+
+Responsible for:
+
+* Game logic
+* Shared game state
+* Synchronization
+* Player management
+* Timer management
+* Broadcasting updates
+
+Important components:
+
+* `GameServerSkeleton`
+* `DataStore`
+* `GameService`
+
+---
+
+## Shared
+
+Contains:
+
+* Protocol definitions
+* Message types
+* Shared constants
+
+---
+
+# Communication Model
+
+The game uses a hybrid communication structure based on two separate socket connections.
+
+## Connection Scheme
+
+```text
++-------------------+
+|   Player Client   |
+|-------------------|
+| PyGame / Terminal |
+| UI                |
++---------+---------+
+          |
+          |
+          v
++-------------------+
+|  GameClientStub   |
++---------+---------+
+          |
+          | Command Socket
+          |
+          v
++-------------------+
+| GameServerSkeleton|
++---------+---------+
+          |
+          v
++-------------------+
+|    GameService    |
++---------+---------+
+          |
+          v
++-------------------+
+|     DataStore     |
+| (shared game      |
+|      state)       |
++-------------------+
+
+
++-------------------+
+| BroadcastListener |
++---------+---------+
+          ^
+          |
+          | Broadcast Socket
+          |
++---------+---------+
+|       Server      |
++-------------------+
 ```
-Main Thread (Command Listener)
-├─ Accept connections → spawn GameServerSkeleton
-└─ Each GameServerSkeleton runs in its own thread
-    └─ Reads from command channel
-    └─ Writes to broadcast channel (via ClientRegistry)
 
-Broadcast Thread
-├─ Accept connections → register in ClientRegistry
-└─ Hold open connections
+The client establishes:
 
-BroadcastSender Thread
-└─ Every 5 seconds: send state to all registered clients
+1. A command connection used to send player actions to the server
+2. A broadcast connection used to receive updated game state and events from the server
 
-DataStore Lock
-└─ Protects all state mutations (threads acquire when accessing game state)
-```
+The server processes commands, updates the centralized game state, and broadcasts the updated state to all connected players.
 
-### Client
+## Command Channel
 
-```
-Main Thread (User Input)
-├─ Read commands from stdin
-└─ Send via command_conn (GameClientStub)
+Clients send commands to the server:
 
-BroadcastListener Thread (daemon)
-├─ Listen on broadcast_conn
-└─ Display messages to stdout
+* MOVE
+* PICK
+* PLANT
+* STATE
+* DISCONNECT
+
+## Broadcast Channel
+
+The server broadcasts:
+
+* Updated game state
+* Events
+* Timer updates
+* Victory/defeat state
+
+---
+
+# Concurrency
+
+The server supports multiple simultaneous players.
+
+Concurrency is handled using:
+
+* Python threads
+* Thread synchronization using `threading.Lock()`
+
+The centralized game state is protected against concurrent access.
+
+---
+
+# Game State Structure
+
+The server maintains a centralized game state containing:
+
+* Players
+* Player positions
+* Flowers
+* Garden spots
+* Obstacles
+* Timer information
+* Connected players
+* Game events
+* Winner state
+
+This state is stored in:
+
+```text
+server/core/data_store.py
 ```
 
 ---
 
-## Data Structures
+# Map
 
-### Player State (DataStore.players)
-```python
-{
-    'position': (x, y),           # Current position
-    'has_flower': bool,           # Carrying a flower?
-    'connected': bool,            # Still connected?
-    'address': 'host:port',       # Client address
-    'name': 'player_name'         # Player's name
-}
-```
+The game uses a 10x10 grid.
 
-### Public Game State (from get_public_state())
-```python
-{
-    'grid_size': [6, 6],
-    'players': {
-        'P1': {'position': [2, 3], 'has_flower': False, 'connected': True},
-        ...
-    },
-    'flowers': [[0, 5], [2, 2], [5, 0]],
-    'garden_spots': [
-        {'position': [5, 5], 'occupied': False},
-        {'position': [0, 0], 'occupied': True},
-        {'position': [3, 4], 'occupied': False}
-    ],
-    'obstacles': [[1, 1], [1, 2], [4, 2], [4, 3]],
-    'time_limit_seconds': 300,
-    'time_remaining_seconds': 287,
-    'winner': None,  # None, 'players', or 'time'
-    'recent_events': [
-        {'timestamp': 2.45, 'message': 'P1 joined...'},
-        ...
-    ]
-}
+The map contains:
+
+* Flowers
+* Obstacles
+* Garden spots
+* Multiple player spawn locations
+
+---
+
+# Characters
+
+Players may choose one of the following characters:
+
+* Hello Kitty
+* Kuromi
+* Cinnamoroll
+* My Melody
+
+---
+
+# Game Flow
+
+1. Players open the client
+2. Players enter a username
+3. Players choose a character
+4. Players connect to the server
+5. The game waits until at least 2 players are connected
+6. The game starts automatically
+7. Players cooperate to complete the garden
+8. The game ends with:
+
+* Victory (all flowers planted)
+* Defeat (time expired)
+
+---
+
+# Running the Project
+
+## Install Dependencies
+
+```bash
+pip install pygame
 ```
 
 ---
 
-## Example Communication Flow
+## Start the Server
 
-### Join Sequence
-```
-Client                              Server
-  │                                   │
-  ├─ Connect to port 37001 ────────-─→│
-  │                                   │
-  ├─ Send {client_token: "uuid"} ────→│
-  │                                   │ (BroadcastAcceptor receives)
-  │                                   │ (Add to ClientRegistry)
-  │                                   │
-  ├─ [Start BroadcastListener]        │
-  │                                   │
-  ├─ Connect to port 37000 ───────-──→│
-  │                                   │ (GameServerSkeleton receives)
-  ├─ Send {type: "join", ...} ─────-─→│
-  │                                   │ (Wait for client in registry)
-  │                                   │ (Call join_player)
-  │                                   │ (Send WELCOME via broadcast)
-  │←─ WELCOME {board, state} ───────-─│
-  │  (BroadcastListener receives)     │
-```
-
-### Move Sequence
-```
-Client                              Server
-  │                                   │
-  ├─ Send {type: "move", ...} ─────-─→│
-  │                                   │ (GameServerSkeleton)
-  │                                   │ (game_service.move())
-  │                                   │ (DataStore validates & updates)
-  │←─ COMMAND_RESULT {board} ──────-──│
-  │  (BroadcastListener receives)     │
-  │                                   │
-  │ (Every 5 seconds)                 │
-  │←─ BROADCAST_STATE {board} ─────--─│
-  │  (From BroadcastSender thread)    │
+```bash
+python -m server
 ```
 
 ---
 
+## Start the Graphical Client
 
-## Key Design Insights
-
-1. **Asymmetric Communication**: Server only sends via broadcast, simplifying client handling and enabling easy player broadcasting.
-
-2. **Token-Based Handshake**: Using UUIDs to correlate broadcast and command channels allows flexibility in connection order.
-
-3. **Thread-Safe State**: All game mutations protected by a single lock in DataStore, ensuring consistency despite concurrent players.
-
-4. **Separation of Concerns**:
-   - Protocol: Handles low-level framing
-   - DataStore: Manages state and validation
-   - GameService: Provides high-level API
-   - Network components: Handle I/O only
-
-5. **Periodic Broadcasting**: Rather than responding to each action, the server periodically pushes the entire state, reducing protocol complexity.
-
-6. **Event Logging**: Circular buffer of recent events provides game history for debugging and player feedback.
-
-7. **Graceful Cleanup**: All threads handle disconnection gracefully, cleaning up resources even in error cases.
+```bash
+python -m client.ui.pygame_interaction --host 127.0.0.1
+```
 
 ---
 
-## Configuration
+## Start the Terminal Client
 
-Modify `shared/constants.py` to adjust:
-- Board size: `GRID_WIDTH`, `GRID_HEIGHT`
-- Player limit: `MAX_PLAYERS`
-- Time limit: `TIME_LIMIT_SECONDS`
-- Object positions: `FLOWERS`, `GARDEN_SPOTS`, `OBSTACLES`
-- Broadcast interval: Pass `interval=` to `BroadcastSender` in `machine.py`
+```bash
+python -m client
+```
 
 ---
 
-## Extensibility
+# Controls
 
-Future enhancements:
+## Movement
 
-- **Difficulty Levels**: Use configuration profiles
-- **GUI Client**: Replace CLI with PyGame
-- **Game Lobby**: Add pre-game room management
+* Arrow Keys
+* OR WASD
 
-Extras:
-- **Statistics**: Track player stats across games
-- **Authentication**: Add login system
-- **Chat**: Enable player communication
+## Actions
+
+* P → Pick flower
+* L → Plant flower
+* SPACE → Request state
+* ESC / Q → Exit game
+
+---
+
+# Final Notes
+
+The game was designed to satisfy the requirements of the Distributed Systems project:
+
+* Independent client and server processes
+* Socket communication
+* Middleware-like abstraction using stubs and skeletons
+* Shared distributed game state
+* Concurrent access management
+* Graphical interface using PyGame
+* Multiplayer support across different computers
+
+The project demonstrates the practical application of distributed systems concepts in an interactive multiplayer environment.

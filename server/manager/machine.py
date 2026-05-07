@@ -36,25 +36,16 @@ from server.network.game_server_skeleton import GameServerSkeleton
 
 
 class Machine:
-    """Main game server orchestrator."""
 
     def __init__(self):
         """Initialize the game server with all required components."""
-        self.data_store = DataStore()                   # Centralized game state
-        self.game_service = GameService(self.data_store)  # Service layer
-        self.client_registry = ClientRegistry()          # Broadcast connection management
+        self.data_store = DataStore()
+        self.game_service = GameService(self.data_store)
+        self.client_registry = ClientRegistry()
 
     def _accept_broadcast_clients(self):
         """
-        Accept incoming broadcast channel connections from clients.
-        
-        This runs in a daemon thread. Each client first opens this connection
-        and sends their token, then opens the command connection.
-        
-        The token is used to correlate the two connections and ensure
-        the player only joins after both channels are established.
-        
-        Runs indefinitely, accepting new broadcast connections.
+        Accept and register broadcast client connections.
         """
         s = socket.socket()
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -84,15 +75,7 @@ class Machine:
 
     def execute(self):
         """
-        Start the game server.
-        
-        Initializes:
-        1. Daemon thread for accepting broadcast connections
-        2. BroadcastSender thread for periodic state updates
-        3. Main server socket for accepting command connections
-        
-        Runs indefinitely, spawning a new GameServerSkeleton thread
-        for each incoming client command connection.
+        Start the server and accept incoming client connections.
         """
         # Start daemon thread for broadcast connections
         threading.Thread(target=self._accept_broadcast_clients, daemon=True).start()
